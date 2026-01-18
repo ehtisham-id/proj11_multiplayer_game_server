@@ -1,33 +1,49 @@
-// Global state
+// ========================================
+// Multiplayer Game Server - COMPLETE CLIENT
+// Handles ALL REST + WebSocket endpoints
+// ========================================
+
+// Global State
 let token = null;
 let userId = null;
 let projectId = null;
-let socket = null;
 let matchId = null;
+let socket = null;
 let gameState = { actors: {} };
-let canvas, ctx, playerActorId = null;
+let playerActorId = null;
+let canvas, ctx;
+let keys = {};
+let projects = [];
+let matches = [];
 
-// DOM elements
+// DOM Elements
 const $ = (id) => document.getElementById(id);
-const emailInput = $('email');
-const passwordInput = $('password');
+const status = $('status');
 const loginScreen = $('loginScreen');
 const gameScreen = $('gameScreen');
-const status = $('status');
+const projectList = $('projectList');
+const matchesList = $('matchesList');
+const projectName = $('projectName');
+const createMatchBtn = $('createMatchBtn');
 const joinQueueBtn = $('joinQueueBtn');
 const spawnBtn = $('spawnBtn');
-const projectList = $('projectList');
-const createProjectBtn = $('createProject');
+const loginStatus = $('loginStatus');
+const playerCount = $('playerCount');
+const matchIdDisplay = $('matchIdDisplay');
+const projectDisplay = $('projectDisplay');
 
-let projects = [];
-
-// Update status
-function updateStatus(msg) {
+// Status Updates
+function updateStatus(msg, type = 'info') {
   status.textContent = msg;
-  console.log(msg);
+  console.log(`[${type.toUpperCase()}] ${msg}`);
+
+  if (loginStatus) {
+    loginStatus.textContent = msg;
+    loginStatus.className = `status-${type}`;
+  }
 }
 
-// API calls
+// API Helper (ALL REST endpoints)
 async function apiCall(endpoint, options = {}) {
   const res = await fetch(`http://localhost:3000${endpoint}`, {
     ...options,
@@ -37,118 +53,190 @@ async function apiCall(endpoint, options = {}) {
       ...options.headers
     }
   });
-  
-  if (!res.ok) throw new Error(await res.text());
+
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.message || res.statusText);
+  }
   return res.json();
 }
 
-// Auth
+// ========================================
+// AUTH ENDPOINTS (Swagger: Auth section)
+// ========================================
 async function register() {
   try {
-    const { accessToken, refreshToken, user } = await apiCall('/auth/register', {
+    updateStatus('Registering...', 'info');
+    const { accessToken, user } = await apiCall('/auth/register', {
       method: 'POST',
       body: JSON.stringify({
-        email: emailInput.value,
-        password: passwordInput.value
+        email: $('email').value,
+        password: $('password').value
       })
     });
     token = accessToken;
     userId = user.id;
-    startGame();
+    updateStatus('✅ Registered! Starting game...', 'success');
+    setTimeout(startGame, 500);
   } catch (e) {
-    updateStatus('Register failed: ' + e.message);
+    updateStatus('❌ Register failed: ' + e.message, 'error');
   }
 }
 
 async function login() {
   try {
-    const { accessToken, refreshToken, user } = await apiCall('/auth/login', {
+    updateStatus('Logging in...', 'info');
+    const { accessToken, user } = await apiCall('/auth/login', {
       method: 'POST',
       body: JSON.stringify({
-        email: emailInput.value,
-        password: passwordInput.value
+        email: $('email').value,
+        password: $('password').value
       })
     });
     token = accessToken;
     userId = user.id;
-    startGame();
+    updateStatus('✅ Logged in! Loading projects...', 'success');
+    setTimeout(startGame, 500);
   } catch (e) {
-    updateStatus('Login failed: ' + e.message);
+    updateStatus('❌ Login failed: ' + e.message, 'error');
   }
 }
 
-// Game initialization
-function startGame() {
-  loginScreen.style.display = 'none';
-  gameScreen.style.display = 'flex';
-  canvas = $('gameCanvas');
-  ctx = canvas.getContext('2d');
-  
-  loadProjects();
-  initGameLoop();
-  connectWebSocket();
+function logout() {
+  token = null;
+  userId = null;
+  projectId = null;
+  matchId = null;
+  gameScreen.classList.remove('active');
+  loginScreen.classList.add('active');
+  updateStatus('Logged out');
+}
+
+// ========================================
+// PROJECTS ENDPOINTS (Swagger: Projects)
+// ========================================
+async function createProject() {
+  try {
+    updateStatus('Creating project...', 'info');
+    const project = await apiCall('/projects', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: projectName.value || `Game ${Date.now()}`,
+        maxPlayersPerMatch: 4
+      })
+    });
+    projects.push(project);
+    projectId = project.id;
+    loadProjects();
+    createMatchBtn.disabled = false;
+    updateStatus(`✅ Project created: ${project.name}`, 'success');
+  } catch (e) {
+    updateStatus('❌ Create failed: ' + e.message, 'error');
+  }
 }
 
 async function loadProjects() {
   try {
     projects = await apiCall('/projects');
-    projectList.innerHTML = projects.map(p => 
-      `<button onclick="selectProject('${p.id}')" ${p.id === projectId ? 'disabled' : ''}>
-        ${p.name} (${p.maxPlayersPerMatch}p)
-      </button>`
-    ).join('');
+    projectList.innerHTML = projects.map(p => `
+      <button onclick="selectProject('${p.id}')" 
+              class="${p.id === projectId ? 'active' : ''}">
+        ${p.name} (${p.maxPlayersPerMatch} players)
+      </button>
+    `).join('');
+    updateStatus(`Loaded ${projects.length} projects`, 'info');
   } catch (e) {
-    updateStatus('Failed to load projects');
+    updateStatus('Failed to load projects', 'error');
   }
 }
 
 function selectProject(id) {
   projectId = id;
-  updateStatus(`Selected project: ${projects.find(p => p.id === id)?.name}`);
-  loadProjects(); // Refresh to show selected
+  loadProjects();
+  projectDisplay.textContent = projects.find(p => p.id === id)?.name || '-';
   joinQueueBtn.disabled = false;
+  updateStatus(`Selected: ${projects.find(p => p.id === id)?.name}`);
 }
 
-async function createProject() {
+// ========================================
+// MATCHES ENDPOINTS (Swagger: Matches)
+// ========================================
+async function createMatch() {
+  if (!projectId) return updateStatus('Select project first', 'error');
   try {
-    const project = await apiCall('/projects', {
-      method: 'POST',
-      body: JSON.stringify({ name: `Game ${Date.now()}` })
-    });
-    projectId = project.id;
-    projects.push(project);
-    loadProjects();
-    updateStatus('Project created!');
+    updateStatus('Creating match...', 'info');
+    const match = await apiCall(`/projects/${projectId}/matches`, { method: 'POST' });
+    matches.push(match);
+    matchId = match.id;
+    loadMatches();
+    updateStatus(`✅ Match created: ${matchId.slice(0, 8)}`, 'success');
   } catch (e) {
-    updateStatus('Create failed: ' + e.message);
+    updateStatus('❌ Create match failed: ' + e.message, 'error');
   }
 }
 
+async function loadMatches() {
+  if (!projectId) return;
+  try {
+    matches = await apiCall(`/projects/${projectId}/matches`);
+    matchesList.innerHTML = matches.map(m => `
+      <div class="match-item ${m.status}">
+        <strong>${m.id.slice(0, 8)}</strong> | ${m.status}
+        <span>${m.players?.length || 0} players</span>
+        <button onclick="joinMatch('${m.id}')" class="btn-join">Join</button>
+      </div>
+    `).join('');
+  } catch (e) {
+    updateStatus('Failed to load matches', 'error');
+  }
+}
+
+function joinMatch(matchIdParam) {
+  matchId = matchIdParam;
+  matchIdDisplay.textContent = matchId.slice(0, 8);
+  spawnBtn.disabled = false;
+  updateStatus(`✅ Joined match: ${matchId.slice(0, 8)}`, 'success');
+}
+
+// ========================================
+// GAME INITIALIZATION
+// ========================================
+function startGame() {
+  loginScreen.classList.remove('active');
+  gameScreen.classList.add('active');
+
+  canvas = $('gameCanvas');
+  ctx = canvas.getContext('2d');
+
+  loadProjects();
+  initInput();
+  initGameLoop();
+  connectWebSocket();
+}
+
 function connectWebSocket() {
+  if (!projectId || !token) return;
+
   socket = io('http://localhost:3000/game', {
     auth: { projectId, accessToken: token }
   });
 
-  socket.on('connect', () => {
-    updateStatus('WebSocket connected!');
-  });
-
+  socket.on('connect', () => updateStatus('🔌 WebSocket connected', 'success'));
   socket.on('connected', (data) => {
     userId = data.userId;
-    updateStatus('Authenticated!');
+    updateStatus('✅ Game server authenticated', 'success');
   });
 
   socket.on('match.found', (data) => {
     matchId = data.matchId;
-    updateStatus('🎉 Match found! ID: ' + matchId);
-    joinQueueBtn.disabled = true;
+    matchIdDisplay.textContent = matchId.slice(0, 8);
     spawnBtn.disabled = false;
-    socket.emit('match.found', { matchId }); // Acknowledge
+    updateStatus('🎉 Match found!', 'success');
   });
 
   socket.on('actor.spawned', (actor) => {
     gameState.actors[actor.id] = actor.state;
-    updateStatus(`Actor ${actor.id} spawned`);
+    updatePlayerCount();
   });
 
   socket.on('actor.updated', (actor) => {
@@ -159,121 +247,154 @@ function connectWebSocket() {
 
   socket.on('state.synced', (state) => {
     gameState = state;
-    updateStatus('State synced');
+    updatePlayerCount();
   });
 
-  socket.on('error', (err) => {
-    updateStatus('Error: ' + err.message);
-  });
+  socket.on('error', (err) => updateStatus('WebSocket error: ' + err.message, 'error'));
 }
 
-async function joinQueue() {
+// ========================================
+// GAME CONTROLS (WebSocket Events)
+// ========================================
+function joinQueue() {
   if (!projectId || !socket) return;
-  
-  updateStatus('🕐 Joining queue...');
+  updateStatus('⏳ Joining queue...', 'info');
   socket.emit('matchmaking.join', { projectId });
 }
 
 async function spawnPlayer() {
-  if (!matchId) return;
-  
-  playerActorId = `player_${userId.slice(0,8)}`;
+  if (!matchId || !socket) return;
+
+  playerActorId = `player_${userId.slice(0, 8)}_${Date.now()}`;
   const x = 100 + Math.random() * 200;
   const y = 100 + Math.random() * 200;
-  
+
   socket.emit('actor.spawn', {
     id: playerActorId,
-    state: { x, y, data: { color: `hsl(${Math.random()*360},70%,60%)`, size: 20 } }
+    state: {
+      x, y,
+      data: {
+        color: `hsl(${Math.random() * 360},70%,60%)`,
+        size: 20,
+        name: userId.slice(0, 8)
+      }
+    }
   });
-  
+
   spawnBtn.disabled = true;
-  updateStatus('Player spawned! Use WASD or mouse to move');
-  
-  // Request full state
+  updateStatus('👤 Player spawned! WASD + Mouse to move', 'success');
   socket.emit('state.sync');
 }
 
-// Input handling
-const keys = {};
-document.addEventListener('keydown', (e) => {
-  keys[e.key.toLowerCase()] = true;
-});
-document.addEventListener('keyup', (e) => {
-  keys[e.key.toLowerCase()] = false;
-});
+function syncState() {
+  if (socket) socket.emit('state.sync');
+}
 
-canvas.addEventListener('mousemove', (e) => {
-  if (playerActorId && gameState.actors[playerActorId]) {
-    const rect = canvas.getBoundingClientRect();
-    const targetX = (e.clientX - rect.left) / rect.width * 800;
-    const targetY = (e.clientY - rect.top) / rect.height * 600;
-    
-    socket.emit('actor.update', {
-      id: playerActorId,
-      state: { x: targetX, y: targetY }
-    });
-  }
-});
+function endMatch() {
+  if (socket) socket.emit('match.end');
+}
 
-// Game loop
+// ========================================
+// INPUT HANDLING
+// ========================================
+function initInput() {
+  // Keyboard
+  document.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
+  document.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+
+  // Mouse movement
+  canvas.addEventListener('mousemove', (e) => {
+    if (playerActorId && gameState.actors[playerActorId]) {
+      const rect = canvas.getBoundingClientRect();
+      const targetX = ((e.clientX - rect.left) / rect.width) * 800;
+      const targetY = ((e.clientY - rect.top) / rect.height) * 600;
+
+      socket?.emit('actor.update', {
+        id: playerActorId,
+        state: { x: targetX, y: targetY }
+      });
+    }
+  });
+}
+
+function updatePlayerCount() {
+  playerCount.textContent = Object.keys(gameState.actors).length;
+}
+
+// ========================================
+// GAME LOOP + RENDERING
+// ========================================
 function initGameLoop() {
   function loop() {
-    // Update player
-    if (playerActorId && gameState.actors[playerActorId]) {
-      const actor = gameState.actors[playerActorId];
-      const speed = 3;
-      
-      if (keys['w'] || keys['arrowup']) actor.state.y = Math.max(0, actor.state.y - speed);
-      if (keys['s'] || keys['arrowdown']) actor.state.y = Math.min(600, actor.state.y + speed);
-      if (keys['a'] || keys['arrowleft']) actor.state.x = Math.max(0, actor.state.x - speed);
-      if (keys['d'] || keys['arrowright']) actor.state.x = Math.min(800, actor.state.x + speed);
-      
-      // Send updates (throttled)
-      if (Math.random() < 0.1) { // 10% chance per frame
-        socket.emit('actor.update', {
-          id: playerActorId,
-          state: actor.state
-        });
-      }
-    }
-    
-    // Render
+    updatePlayerMovement();
     render();
     requestAnimationFrame(loop);
   }
   loop();
 }
 
+function updatePlayerMovement() {
+  if (playerActorId && gameState.actors[playerActorId]) {
+    const actor = gameState.actors[playerActorId];
+    const speed = 4;
+
+    if (keys['w'] || keys['arrowup']) actor.state.y = Math.max(0, actor.state.y - speed);
+    if (keys['s'] || keys['arrowdown']) actor.state.y = Math.min(600, actor.state.y + speed);
+    if (keys['a'] || keys['arrowleft']) actor.state.x = Math.max(0, actor.state.x - speed);
+    if (keys['d'] || keys['arrowright']) actor.state.x = Math.min(800, actor.state.x + speed);
+
+    // Throttled updates
+    if (Math.random() < 0.15) {
+      socket?.emit('actor.update', { id: playerActorId, state: actor.state });
+    }
+  }
+}
+
 function render() {
+  // Clear
   ctx.fillStyle = '#16213e';
   ctx.fillRect(0, 0, 800, 600);
 
-  // Render all actors
+  // Render actors
   Object.entries(gameState.actors).forEach(([id, actor]) => {
     const { x, y, data } = actor.state;
-    
+    const size = data?.size || 20;
+    const color = data?.color || '#4ecdc4';
+
     // Shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
     ctx.beginPath();
-    ctx.arc(x + 3, y + 3, data.size || 20, 0, Math.PI * 2);
+    ctx.arc(x + 4, y + 4, size, 0, Math.PI * 2);
     ctx.fill();
-    
-    // Actor
-    ctx.fillStyle = data.color || '#4ecdc4';
+
+    // Player
+    ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.arc(x, y, data.size || 20, 0, Math.PI * 2);
+    ctx.arc(x, y, size, 0, Math.PI * 2);
     ctx.fill();
-    
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
     // Label
     ctx.fillStyle = 'white';
-    ctx.font = '12px monospace';
+    ctx.font = 'bold 12px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(id.slice(0,6), x, y + 35);
+    ctx.textBaseline = 'middle';
+    ctx.fillText(data?.name || id.slice(0, 6), x, y - size - 10);
   });
 
   // Instructions
-  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.fillStyle = 'rgba(255,255,255,0.2)';
   ctx.font = '14px monospace';
   ctx.textAlign = 'right';
-  ctx.fillText('WASD or Mouse • Real-time multiplayer demo', 790, 30);
+  ctx.textBaseline = 'top';
+  ctx.fillText('WASD + Mouse | Multiplayer Demo', 780, 20);
 }
+
+// ========================================
+// AUTO-START
+// ========================================
+document.addEventListener('DOMContentLoaded', () => {
+  updateStatus('Ready. Login to start multiplayer demo!');
+});
