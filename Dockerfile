@@ -1,13 +1,22 @@
-FROM node:24-alpine AS builder
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production && npm cache clean --force
-
 FROM node:24-alpine
+
+# Set working directory
 WORKDIR /app
+
+# Install global Nest CLI
 RUN npm install -g @nestjs/cli
-COPY --from=builder /app/node_modules ./node_modules
+
+# Copy package files first
+COPY package*.json ./
+
+# Install all dependencies including devDependencies
+RUN npm install
+
+# Copy all source code
 COPY . .
-RUN npm run build
+
+# Expose port
 EXPOSE 3000
-CMD ["npm", "run", "start:prod"]
+
+# Default command: development mode with hot reload
+CMD ["npm", "run", "start:dev"]

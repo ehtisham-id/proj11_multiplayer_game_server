@@ -8,12 +8,8 @@ import { AuthModule } from '../auth/auth.module';
 import { MatchesModule } from '../matches/matches.module';
 
 @Module({
-  imports: [
-    RedisModule,
-    MatchmakingModule,
-    AuthModule,
-    MatchesModule,
-  ],
+  imports: [RedisModule, MatchmakingModule, AuthModule, MatchesModule],
   providers: [GameGateway, GameService, GameEngineService],
+  exports: [GameEngineService],
 })
 export class GameModule {}
