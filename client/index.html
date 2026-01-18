@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Multiplayer Game Server Demo</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body>
+  <!-- Login Screen -->
+  <div id="loginScreen">
+    <h1>🎮 Multiplayer Demo</h1>
+    <input id="email" type="email" placeholder="Email" value="test@example.com">
+    <input id="password" type="password" placeholder="Password" value="password123">
+    <button onclick="login()">Login</button>
+    <button onclick="register()">Register</button>
+  </div>
+
+  <!-- Game Screen -->
+  <div id="gameScreen" style="display: none;">
+    <div id="ui">
+      <button id="createProject" onclick="createProject()">New Project</button>
+      <div id="projectList"></div>
+      <button id="joinQueueBtn" onclick="joinQueue()" disabled>Join Match</button>
+      <button id="spawnBtn" onclick="spawnPlayer()" disabled>Spawn Player</button>
+      <div id="status">Ready</div>
+    </div>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
